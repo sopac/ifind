@@ -6,7 +6,7 @@ Rust-based Command Line Tool (CLI) that persists directory structure and files i
 
 ## Implementation
 
-Populates a vector (vec) of  structs containg file details, after recursively traversing a directory (using walkdir crate), and persisting it to CBOR format (using serde crate).
+Populates a vector (vec) of  structs containing file details, after recursively traversing a directory (using walkdir crate), and persisting it to CBOR format (using serde crate).
 
 CLI parsing is implement using Clap crate, with the following options:
 
