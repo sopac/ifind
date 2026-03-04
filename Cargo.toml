@@ -1,5 +1,5 @@
 [package]
-name = "instant-find"
+name = "ifind"
 version = "0.1.0"
 edition = "2024"
 
