@@ -30,12 +30,15 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Commands {
-    Update { directory: PathBuf },
+    Update {
+        directory: PathBuf,
+    },
     Search {
         query: String,
         #[arg(short, long)]
         extension: Option<String>,
     },
+    Clear {},
 }
 
 fn main() -> AppResult<()> {
@@ -43,6 +46,7 @@ fn main() -> AppResult<()> {
     match cli.command {
         Some(Commands::Update { directory }) => update_index(&directory),
         Some(Commands::Search { query, extension }) => search_index(&query, extension.as_deref()),
+        Some(Commands::Clear {}) => clear_index(),
         None => search_index(
             cli.query.as_deref().ok_or("query is required")?,
             cli.extension.as_deref(),
@@ -50,8 +54,28 @@ fn main() -> AppResult<()> {
     }
 }
 
+fn clear_index() -> AppResult<()> {
+    let index_path = cache_file_path()?;
+    if index_path.exists() {
+        fs::remove_file(index_path)?;
+        println!("Index Cleared.");
+    } else {
+        println!("Index Not Found.");
+    }
+    Ok(())
+}
+
 fn update_index(directory: &Path) -> AppResult<()> {
     let mut entries = Vec::new();
+
+    let index_path = cache_file_path()?;
+
+    // append existing serialization
+    if index_path.exists() {
+        let bytes = fs::read(&index_path)?;
+        entries = serde_cbor::from_slice(&bytes)?;
+    }
+
     for entry in WalkDir::new(directory) {
         let entry = entry?;
         if !entry.file_type().is_file() {
@@ -71,26 +95,39 @@ fn update_index(directory: &Path) -> AppResult<()> {
             .map(|ext| ext.to_string_lossy().into_owned())
             .unwrap_or_default();
 
-        entries.push(FileEntry {
-            filename,
-            folder,
-            extension,
-            modified,
-        });
+        let ignore_list: Vec<&str> = vec![".git", ".build", ".venv", "target/"];
+
+        if !ignore_list.iter().any(|ignore| folder.contains(ignore)) {
+            entries.push(FileEntry {
+                filename,
+                folder,
+                extension,
+                modified,
+            });
+        }
     }
 
-    let index_path = cache_file_path()?;
     if let Some(parent) = index_path.parent() {
         fs::create_dir_all(parent)?;
     }
     let bytes = serde_cbor::to_vec(&entries)?;
     fs::write(&index_path, bytes)?;
-    println!("Indexed {} files at {}", entries.len(), index_path.display());
+    println!(
+        "Indexed {} files at {}",
+        entries.len(),
+        index_path.display()
+    );
     Ok(())
 }
 
 fn search_index(query: &str, extension: Option<&str>) -> AppResult<()> {
     let index_path = cache_file_path()?;
+
+    if !index_path.exists() {
+        println!("Index Not Found. Please Run 'ifind update <directory>' First.");
+        return Ok(());
+    }
+
     let bytes = fs::read(&index_path)?;
     let mut entries: Vec<FileEntry> = serde_cbor::from_slice(&bytes)?;
     let query = query.to_lowercase();
@@ -109,9 +146,13 @@ fn search_index(query: &str, extension: Option<&str>) -> AppResult<()> {
 
     entries.sort_by_key(|entry| Reverse(entry.modified));
     for entry in entries {
+        let mut folder = entry.folder;
+        folder = folder.replace("/share/", "");
+        folder = folder.replace("/Users/sachin/tmp/", "");
+
         println!(
             "{}\t{}\t{}\t{}",
-            entry.modified, entry.extension, entry.folder, entry.filename
+            entry.modified, entry.extension, folder, entry.filename
         );
     }
 
@@ -125,9 +166,7 @@ fn system_time_to_date(system_time: SystemTime) -> AppResult<Date> {
 
 fn cache_file_path() -> AppResult<PathBuf> {
     let home = std::env::var_os("HOME").ok_or("HOME environment variable is not set")?;
-    Ok(PathBuf::from(home)
-        .join(".cache")
-        .join("ifind.cbor"))
+    Ok(PathBuf::from(home).join(".cache").join("ifind.cbor"))
 }
 
 fn normalize_extension(extension: &str) -> String {
