@@ -79,31 +79,68 @@ fn update_index(directory: &Path) -> AppResult<()> {
         }
     }
 
+    println!("{} : Files Already Indexed.", entries_by_path.len());
+
     let ignore_list = [".git", ".build", ".venv", "target/"];
 
-    for entry in WalkDir::new(directory) {
-        let entry = entry?;
+    let mut added_count = 0usize;
+    let mut skipped_existing_count = 0usize;
+    let mut skipped_error_count = 0usize;
+
+    for entry in WalkDir::new(directory).max_depth(10) {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) => {
+                skipped_error_count += 1;
+                eprintln!("Skipping unreadable path: {err}");
+                continue;
+            }
+        };
         if !entry.file_type().is_file() {
             continue;
         }
 
-        let metadata = entry.metadata()?;
-        let modified = system_time_to_date(metadata.modified()?)?;
         let path = entry.path();
         let filename = entry.file_name().to_string_lossy().into_owned();
         let folder = path
             .parent()
             .map(|parent| parent.to_string_lossy().into_owned())
             .unwrap_or_default();
+        let key = entry_key(&folder, &filename);
+
+        if entries_by_path.contains_key(&key) {
+            skipped_existing_count += 1;
+            continue;
+        }
+
+        let metadata = match entry.metadata() {
+            Ok(metadata) => metadata,
+            Err(err) => {
+                skipped_error_count += 1;
+                eprintln!("Skipping metadata error for {}: {err}", path.display());
+                continue;
+            }
+        };
+        let modified = match metadata.modified() {
+            Ok(modified) => system_time_to_date(modified)?,
+            Err(err) => {
+                skipped_error_count += 1;
+                eprintln!(
+                    "Skipping modified-time error for {}: {err}",
+                    path.display()
+                );
+                continue;
+            }
+        };
         let extension = path
             .extension()
             .map(|ext| ext.to_string_lossy().into_owned())
             .unwrap_or_default();
 
         if !ignore_list.iter().any(|ignore| folder.contains(ignore)) {
-            println!("{}/{}", folder, filename);
+            //println!("{}/{}", folder, filename);
             entries_by_path.insert(
-                entry_key(&folder, &filename),
+                key,
                 FileEntry {
                 filename,
                 folder,
@@ -111,6 +148,7 @@ fn update_index(directory: &Path) -> AppResult<()> {
                 modified,
                 },
             );
+            added_count += 1;
         }
     }
 
@@ -125,6 +163,10 @@ fn update_index(directory: &Path) -> AppResult<()> {
         "Indexed {} files at {}",
         entries.len(),
         index_path.display()
+    );
+    println!(
+        "Added: {}, Already indexed: {}, Skipped errors: {}",
+        added_count, skipped_existing_count, skipped_error_count
     );
     Ok(())
 }
