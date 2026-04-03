@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;
+use std::collections::HashMap;
 use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -66,15 +67,19 @@ fn clear_index() -> AppResult<()> {
 }
 
 fn update_index(directory: &Path) -> AppResult<()> {
-    let mut entries = Vec::new();
-
     let index_path = cache_file_path()?;
+    let mut entries_by_path: HashMap<String, FileEntry> = HashMap::new();
 
-    // append existing serialization
+    // Load existing index entries and collapse any historical duplicates by path.
     if index_path.exists() {
         let bytes = fs::read(&index_path)?;
-        entries = serde_cbor::from_slice(&bytes)?;
+        let entries: Vec<FileEntry> = serde_cbor::from_slice(&bytes)?;
+        for entry in entries {
+            entries_by_path.insert(entry_key(&entry.folder, &entry.filename), entry);
+        }
     }
+
+    let ignore_list = [".git", ".build", ".venv", "target/"];
 
     for entry in WalkDir::new(directory) {
         let entry = entry?;
@@ -95,17 +100,21 @@ fn update_index(directory: &Path) -> AppResult<()> {
             .map(|ext| ext.to_string_lossy().into_owned())
             .unwrap_or_default();
 
-        let ignore_list: Vec<&str> = vec![".git", ".build", ".venv", "target/"];
-
         if !ignore_list.iter().any(|ignore| folder.contains(ignore)) {
-            entries.push(FileEntry {
+            println!("{}/{}", folder, filename);
+            entries_by_path.insert(
+                entry_key(&folder, &filename),
+                FileEntry {
                 filename,
                 folder,
                 extension,
                 modified,
-            });
+                },
+            );
         }
     }
+
+    let entries: Vec<FileEntry> = entries_by_path.into_values().collect();
 
     if let Some(parent) = index_path.parent() {
         fs::create_dir_all(parent)?;
@@ -171,4 +180,8 @@ fn cache_file_path() -> AppResult<PathBuf> {
 
 fn normalize_extension(extension: &str) -> String {
     extension.trim_start_matches('.').to_ascii_lowercase()
+}
+
+fn entry_key(folder: &str, filename: &str) -> String {
+    format!("{folder}/{filename}")
 }
